@@ -102,8 +102,12 @@ def create_app() -> FastAPI:
     # under /documentation, and /api/docs returns the same files as JSON).
     docs_dir = docs_mod.docs_root()
     if docs_dir.is_dir():
-        app.mount(settings.docs_url_path, StaticFiles(directory=str(docs_dir), html=False),
-                  name="documentation")
+        try:
+            app.mount(settings.docs_url_path, StaticFiles(directory=str(docs_dir), html=False),
+                      name="documentation")
+        except Exception:
+            pass
+
 
     dist = settings.frontend_dist
     if not os.environ.get("VERCEL") and os.path.isdir(dist) and os.path.exists(os.path.join(dist, "index.html")):
