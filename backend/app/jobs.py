@@ -89,6 +89,7 @@ class JobManager:
 
     # -- api ---------------------------------------------------------------------------
     def submit(self, kind: str, fn: Callable[[Job], Any], params: dict | None = None) -> Job:
+        import os
         job = Job(kind, params)
         job._fn = fn                                                       # type: ignore[attr-defined]
         with self._cv:
@@ -97,8 +98,38 @@ class JobManager:
                 self._jobs.popitem(last=False)
             self._queue.append(job)
             self._cv.notify()
-        self.start()
+
+        if os.environ.get("VERCEL") or os.environ.get("SIH_SYNC_JOBS") == "1":
+            # In serverless environments, execute synchronously before returning
+            with self._cv:
+                if job in self._queue:
+                    self._queue.remove(job)
+            self._execute_job(job)
+        else:
+            self.start()
         return job
+
+    def _execute_job(self, job: Job) -> None:
+        if job.status == "cancelled":
+            return
+        job.status = "running"
+        job.started_at = time.time()
+        job.set_progress(0.01, "starting")
+        try:
+            job.result = job._fn(job)                                  # type: ignore[attr-defined]
+            job.status = "cancelled" if job.cancelled() else "done"
+            if job.status == "cancelled":
+                job.message = "cancelled"
+            else:
+                job.set_progress(1.0, "done")
+        except Exception as exc:                                       # pragma: no cover
+            job.status = "failed"
+            job.error = f"{type(exc).__name__}: {exc}"
+            job.traceback = traceback.format_exc(limit=6)
+            job.message = job.error
+        finally:
+            job.finished_at = time.time()
+
 
     def get(self, job_id: str) -> Job | None:
         with self._lock:
@@ -132,25 +163,8 @@ class JobManager:
                 if self._stopped:
                     return
                 job = self._queue.pop(0)
-            if job.status == "cancelled":
-                continue
-            job.status = "running"
-            job.started_at = time.time()
-            job.set_progress(0.01, "starting")
-            try:
-                job.result = job._fn(job)                                  # type: ignore[attr-defined]
-                job.status = "cancelled" if job.cancelled() else "done"
-                if job.status == "cancelled":
-                    job.message = "cancelled"
-                else:
-                    job.set_progress(1.0, "done")
-            except Exception as exc:                                       # pragma: no cover
-                job.status = "failed"
-                job.error = f"{type(exc).__name__}: {exc}"
-                job.traceback = traceback.format_exc(limit=6)
-                job.message = job.error
-            finally:
-                job.finished_at = time.time()
+            self._execute_job(job)
+
 
 
 job_manager = JobManager()
