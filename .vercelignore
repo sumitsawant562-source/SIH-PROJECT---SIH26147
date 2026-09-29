@@ -6,3 +6,5 @@ docker
 tests
 *.log
 tmp_*
+sample_data
+ml/models
