@@ -1,0 +1,697 @@
+================================================================================
+  SIH26147: AUTOMATED MODEL FOR ANALYSIS OF .IQ AND .WAV FILES 
+            ALONG WITH SIGNAL PARAMETER EXTRACTION
+================================================================================
+           COMPLETE MASTER SYSTEM DOCUMENTATION & TECHNICAL HANDBOOK
+================================================================================
+
+This document contains a 100% complete, exhaustive, end-to-end breakdown of 
+the entire SIH26147 RF Signal Intelligence Platform. It covers the problem 
+statement, full technology stack, file-by-file directory map, mathematical & 
+algorithmic specifications of all 15 DSP pipeline stages, API endpoints, 
+frontend UI architecture, data flows, database schemas, synthetic generator 
+mechanics, and deployment procedures.
+
+
+================================================================================
+TABLE OF CONTENTS
+================================================================================
+1. PROBLEM STATEMENT & PROJECT IDENTITY
+2. COMPLETE TECHNOLOGY STACK & DEPENDENCY MATRIX
+3. EXHAUSTIVE REPOSITORY & FILE MAP
+4. SYSTEM DATA FLOW & ASYNC EXECUTION MODEL
+5. ALGORITHMIC & MATHEMATICAL SPECIFICATION OF THE 15 DSP STAGES
+6. MACHINE LEARNING MODULATION CLASSIFIER SUBSYSTEM
+7. FULL REST API REFERENCE & ROUTE CATALOG
+8. FRONTEND ARCHITECTURE & 20-PAGE COMPONENT GUIDE
+9. SYNTHETIC GENERATOR & SELF-BENCHMARKING ENGINE
+10. DATABASE SCHEMA & PERSISTENCE MODEL
+11. DEPLOYMENT, DOCKER & VERIFICATION GUIDE
+
+
+================================================================================
+1. PROBLEM STATEMENT & PROJECT IDENTITY
+================================================================================
+
+PROBLEM STATEMENT (SIH26147):
+"Automated Model for Analysis of .IQ and .WAV Files Along with Signal Parameter 
+ Extraction"
+
+DOMAIN & CONTEXT:
+Radio Frequency (RF) Signal Intelligence (SIGINT), Software Defined Radio (SDR), 
+and Automated Modulation Classification (AMC). In defense, spectrum management, 
+and electronic warfare, unknown RF signals are intercepted without prior metadata. 
+Operators receive raw binary samples (.iq, complex binary) or audio-wrapped captures (.wav) 
+and must determine:
+  - What sample format and data type are present?
+  - What frequencies and bandwidths are being occupied?
+  - How many distinct signal emissions exist?
+  - What are the symbol rates, frequency deviations, and signal power levels?
+  - What modulation scheme is being used (BPSK, QPSK, 8PSK, 16QAM, 64QAM, FSK, AM, FM)?
+  - How to demodulate the signal without user-provided parameters (Blind Demodulation)?
+  - What Forward Error Correction (FEC) and interleaving schemes are applied?
+  - What data or protocol structure lies within the extracted bitstream?
+
+CORE PHILOSOPHY & NON-CLAIMS:
+1. 100% Deterministic & Inspectable: Every chart, metric, and confidence score is 
+   computed deterministically from signal samples via SciPy/NumPy algorithms. No 
+   decorative visuals or fake numbers are ever generated.
+2. Honest Uncertainty Handling: If a signal parameter cannot be reliably estimated 
+   (e.g., due to low SNR or lack of cyclostationary features), the platform explicitly 
+   sets `status="unable"` with `value=null` and attaches the exact reason.
+3. Hybrid Decision Engine: AMC uses a composite matrix combining physical DSP rules, 
+   measured constellation Error Vector Magnitude (EVM), spectral features, and an 
+   optional scikit-learn RandomForest model vote. ML is an optional contributor, 
+   never a single point of failure.
+4. Session Isolation: All uploads, analyses, and reports are strictly scoped to user 
+   browser sessions using `x-session-id` headers.
+
+
+================================================================================
+2. COMPLETE TECHNOLOGY STACK & DEPENDENCY MATRIX
+================================================================================
+
+A. BACKEND FRAMEWORK & RUNTIME:
+  - Python: 3.12+
+  - FastAPI (>=0.110): Asynchronous Web Framework for REST APIs with Pydantic schemas.
+  - Uvicorn (>=0.27): ASGI server running the FastAPI application.
+  - Pydantic (>=2.5): Data validation, settings management, and request/response models.
+  - SQLAlchemy (>=2.0): ORM for relational database interaction.
+  - ReportLab (>=4.0): PDF document generation engine for generating formal reports.
+  - HTTPX (>=0.27): Async HTTP client for internal and integration testing.
+  - email-validator: Pydantic email string validation support.
+  - psycopg[binary] (>=3.1): PostgreSQL driver (used when SIH_DATABASE_URL is set).
+
+B. DSP & COMPUTATIONAL MATHEMATICS:
+  - NumPy (>=1.26): Multi-dimensional complex array manipulation, matrix math, FFTs.
+  - SciPy (>=1.11): Signal processing toolbox (`scipy.signal` for STFT, Welch PSD, 
+    filter design, resample, convolution, peak finding).
+
+C. MACHINE LEARNING:
+  - scikit-learn (>=1.3): RandomForestClassifier for modulation classification.
+  - joblib (>=1.3): Model serialization and loading (`ml/models/modclass.joblib`).
+  - Matplotlib (>=3.8): Feature visualization and offline chart plotting for ML training.
+
+D. FRONTEND USER INTERFACE:
+  - React 18: Core UI library for component-based Single Page Application (SPA).
+  - TypeScript (>=5.6): Type-safe frontend application codebase.
+  - Vite (>=5.4): Fast build tool, HMR dev server, and bundling engine.
+  - Plotly.js (`plotly.js-dist-min` >=2.35): High-performance interactive 2D/3D charting 
+    (Power Spectral Density, STFT Waterfall, Constellation EVM, Eye Diagrams).
+  - Lucide React: Iconography set for dark RF-laboratory aesthetic.
+  - Tailwind CSS: Responsive utility styling.
+
+E. PACKAGING & CONTAINERS:
+  - Docker & Docker Compose: Multi-stage Dockerfile packaging FastAPI + Node build 
+    into a single container or multi-service setup.
+
+
+================================================================================
+3. EXHAUSTIVE REPOSITORY & FILE MAP
+================================================================================
+
+```
+SIH-PROJECT---SIH26147/
+│
+├── backend/                             FastAPI Web Application Root
+│   ├── __init__.py
+│   └── app/
+│       ├── __init__.py
+│       ├── config.py                    System settings, directory paths, limits, env variables
+│       ├── db.py                        SQLAlchemy database setup, session factory, init_db()
+│       ├── jobs.py                      Background worker thread pool, progress tracking, cancellation
+│       ├── main.py                      FastAPI entrypoint, CORS, static mounts, exception handlers
+│       ├── models.py                    SQLAlchemy ORM tables (UploadFileRow, AnalysisSessionRow, etc.)
+│       ├── reports.py                   ReportLab PDF generator, CSV/JSON/TXT report builders
+│       ├── security.py                  Session isolation, filename sanitization, extension checks
+│       ├── services.py                  Orchestration layer connecting API routes to DSP engine
+│       ├── storage.py                   File streaming, gzip result cache (.json.gz), cleanup logic
+│       ├── views.py                     Pydantic response models for system views
+│       └── routes/                      REST API Endpoint Controllers
+│           ├── __init__.py              Router aggregator (`api_router`)
+│           ├── analysis.py              `/api/analyze`, `/api/blind-analysis`, `/api/analysis/*`
+│           ├── auth.py                  `/api/auth/login`, `/api/auth/register`, `/api/auth/me`
+│           ├── benchmark.py             `/api/benchmark`, `/api/benchmarks`
+│           ├── common.py                Shared route dependencies, error handling, session retrieval
+│           ├── docs.py                  `/api/docs`, documentation index handler
+│           ├── dspops.py                Single-stage DSP operations (`/api/spectrum`, `/api/preprocess`, etc.)
+│           ├── files.py                 `/api/upload`, `/api/files`, demo file loaders
+│           ├── generate.py              `/api/generate`, `/api/generator/verify`
+│           ├── modules.py               Standalone DSP modules (`/api/demodulate`, `/api/fec/analyze`, etc.)
+│           ├── reports.py               `/api/reports`, `/api/report/*/download`
+│           └── system.py                `/api/health`, `/api/capabilities`, `/api/stats`
+│
+├── dsp/                                 DSP Engine (Mathematical Core)
+│   ├── __init__.py
+│   ├── benchmark.py                     Self-benchmark harness across SNRs & modulations
+│   ├── bitstream.py                     Shannon entropy, byte histograms, run lengths, ASCII candidates
+│   ├── compare.py                       Dual-signal comparison engine (spectral, parameter, bit metrics)
+│   ├── correlate.py                     FFT cross-correlation & repeated sync word discovery
+│   ├── demod.py                         Digital & analog demodulators, Costas loop, RRC, Gardner timing
+│   ├── detect.py                        CFAR multi-emission signal detector
+│   ├── fec.py                           Viterbi convolutional & Reed-Solomon hypothesis testing
+│   ├── hypothesis.py                    Multi-hypothesis composite pipeline scoring engine
+│   ├── interleave.py                    Matrix block & convolutional de-interleaving search
+│   ├── iqformats.py                     Format auto-detection (7 dtypes, IQ layout, WAV header parser)
+│   ├── modulation.py                    Hybrid AMC classifier, EVM evaluator, Eye diagram builder
+│   ├── params.py                        Symbol rate estimators (3 algorithms), deviation, PAPR
+│   ├── pipeline.py                      Master orchestrator (`analyse_record`), stage recorder, evidence graph
+│   ├── preprocess.py                    DC removal, detrend, normalise, LPF/BPF/HPF, resample
+│   ├── scenarios.py                     Deterministic test signal scenario generators
+│   ├── spectrum.py                      Welch PSD, peak carrier, occupied bandwidth (99%), noise floor, SNR
+│   ├── synth.py                         Synthetic IQ signal generator with configurable impairments
+│   ├── utils.py                         Parameter record formatting (`param`, `unable`), decimation
+│   └── waterfall.py                     STFT spectrogram matrix calculation & ROI region extraction
+│
+├── ml/                                  Machine Learning Modulation Classifier Subsystem
+│   ├── train_classifier.py              Training script generating RandomForest model from DSP features
+│   └── models/
+│       ├── modclass.joblib              Trained scikit-learn model artifact
+│       └── modclass_report.json         Offline evaluation report & feature importance metrics
+│
+├── frontend/                            React + TypeScript + Vite Single Page Application
+│   ├── index.html                       HTML document entrypoint
+│   ├── package.json                     NPM package dependencies and scripts
+│   ├── vite.config.ts                   Vite server configuration, port 5173, API proxy rules
+│   ├── tsconfig.json                    TypeScript compiler options
+│   └── src/
+│       ├── App.tsx                      Main React router, layout, global job bar, toasts
+│       ├── main.tsx                     React DOM root render
+│       ├── components/                  Reusable UI Components
+│       │   ├── Plot.tsx                 Plotly.js chart wrapper component
+│       │   ├── ResultView.tsx           Complete analysis result view with 10 tab views
+│       │   ├── RunPanel.tsx             Parameter hint input panel
+│       │   ├── blocks.tsx               Metric cards, badges, status indicators
+│       │   ├── charts.tsx               Dedicated spectrum, waterfall, eye, constellation charts
+│       │   ├── jobbar.tsx               Live job progress bar with cancellation
+│       │   └── ui.tsx                   Modal, button, input, tab primitives
+│       ├── lib/
+│       │   ├── api.ts                   Axios/Fetch HTTP API client with `x-session-id` support
+│       │   ├── auth.ts                  Token storage and auth helper functions
+│       │   ├── format.ts                Formatting utilities (Hz, dB, bps, EVM, entropy)
+│       │   ├── md.tsx                   Markdown rendering component
+│       │   └── store.tsx                React Context store holding app state, files, current analysis
+│       ├── pages/                       20 Application Page Views
+│       │   ├── Analyze.tsx              Guided analysis page with upload & hints
+│       │   ├── AnalyzeDetail.tsx        Analysis detail viewer page
+│       │   ├── Benchmark.tsx            AMC benchmark & confusion matrix page
+│       │   ├── Bitstream.tsx            Bitstream analysis & pattern correlation page
+│       │   ├── Blind.tsx                Zero-hint Blind Analysis page
+│       │   ├── Compare.tsx              Signal comparison page
+│       │   ├── Dashboard.tsx            System dashboard & quick stats page
+│       │   ├── Demo.tsx                 SIH 8-step live judge walk-through page
+│       │   ├── Demodulation.tsx         Standalone demodulator testing page
+│       │   ├── Documentation.tsx        Embedded repository documentation browser
+│       │   ├── Explorer.tsx             Raw signal inspector & format override page
+│       │   ├── FecInterleave.tsx        Standalone FEC & interleaving hypothesis tester
+│       │   ├── Generator.tsx            Synthetic signal generator page
+│       │   ├── History.tsx              Past analyses history log page
+│       │   ├── Landing.tsx              Welcome landing page
+│       │   ├── Live.tsx                 Live stream / continuous monitor view page
+│       │   ├── Login.tsx                Authentication login page
+│       │   ├── Modulation.tsx           Standalone AMC modulation classifier page
+│       │   ├── Reports.tsx              Report generation & download manager page
+│       │   └── Settings.tsx             System configuration & limits page
+│       └── styles/
+│           └── app.css                  Custom CSS and dark RF lab theme rules
+│
+├── docs/                                Repository Documentation Markdown Files
+│   ├── 01_overview.md                   System overview, problem statement, key capabilities
+│   ├── 02_architecture.md               Component diagrams, request flow, storage architecture
+│   ├── 03_pipeline.md                   Stage-by-stage pipeline explanation & evidence graph
+│   ├── 04_api_reference.md              Complete HTTP REST API reference documentation
+│   ├── 05_database_schema.md            Relational database ERD & table specifications
+│   ├── 06_methods.md                    Detailed mathematical description of DSP algorithms
+│   ├── 08_limitations.md                Honest limitations, edge cases, non-claims
+│   ├── 09_sih_demo.md                   Step-by-step judge script for live demo
+│   ├── index.json                       Generated documentation metadata index
+│   └── make_docs.py                     Script building index.json from markdown files
+│
+├── sample_data/                         Bundled Sample IQ Signals & Answer Key
+│   ├── GROUND_TRUTH.json                Ground truth answer key for sample files
+│   ├── sample_bpsk.wav                  Sample BPSK signal
+│   ├── sample_qpsk.wav                  Sample QPSK signal
+│   ├── sample_8psk.wav                  Sample 8PSK signal
+│   ├── sample_16qam.wav                 Sample 16QAM signal
+│   ├── sample_fsk.wav                   Sample FSK signal
+│   └── sample_noisy_qpsk.wav            Sample Low-SNR QPSK signal
+│
+├── tests/                               Pytest Suite & Integration Smoke Tests
+│   ├── conftest.py                      Pytest setup fixtures
+│   ├── smoke_api.py                     Complete end-to-end HTTP REST API smoke test
+│   ├── test_detect.py                   Unit tests for CFAR detection algorithm
+│   ├── test_spectrum.py                 Unit tests for PSD, OBW, and SNR algorithms
+│   └── test_waterfall.py                Unit tests for STFT spectrogram generation
+│
+├── docker/                              Docker Build Files
+│   ├── Dockerfile                       Multi-stage container build definition
+│   ├── README.md                        Docker deployment usage guide
+│   └── entrypoint.sh                    Container startup shell script
+│
+├── .dockerignore                        Docker ignore rules
+├── .env.example                         Example environment configuration file
+├── .gitignore                           Git ignore rules
+├── docker-compose.yml                   Docker Compose configuration
+├── requirements.txt                     Python package dependencies
+├── PROJECT_EXPLANATION_AND_EXECUTION_FLOW.txt  High-level presentation guide
+└── COMPLETE_PROJECT_DOCUMENTATION_AND_HANDBOOK.txt  This comprehensive handbook
+```
+
+
+================================================================================
+4. SYSTEM DATA FLOW & ASYNC EXECUTION MODEL
+================================================================================
+
+1. CLIENT REQUEST & FILE INGESTION:
+   - User drops a `.wav`, `.iq`, or `.cbin` file in the UI.
+   - `frontend/src/lib/api.ts` sends `POST /api/upload` with `x-session-id` header.
+   - FastAPI (`backend/app/routes/files.py`) streams the body in 64 KB chunks to 
+     `data/uploads/<uuid>.<ext>` up to `SIH_MAX_UPLOAD_MB`.
+   - `dsp/iqformats.detect_format` reads initial byte chunks, identifies container header 
+     or binary structure, and returns a format detection report cached in DB.
+
+2. JOB ENQUEUEING & BACKGROUND THREAD POOL:
+   - User initiates analysis (`POST /api/analyze` or `/api/blind-analysis`).
+   - `backend/app/jobs.py` creates an `AnalysisSessionRow` in SQLite/PostgreSQL with `status="queued"`.
+   - The job is dispatched to a background worker thread (`ThreadPoolExecutor`).
+   - The frontend UI immediately receives `{ "job_id": "...", "status": "queued" }` and 
+     starts polling `GET /api/jobs/{id}` at 1-second intervals.
+
+3. WORKER PIPELINE EXECUTION (`dsp/pipeline.py`):
+   - The worker thread calls `dsp/pipeline.analyse_record`.
+   - As each of the 15 pipeline stages executes, the worker updates the job status message 
+     (e.g., `spectrum -> spectrogram -> detection -> parameters -> classification...`) 
+     and writes progress percentages (0% to 100%).
+   - If a specific stage encounters invalid data (e.g. noise-only input), the stage recorder 
+     catches the exception, marks `ok=False` for that stage, sets dependent downstream 
+     outputs to `status="unable"`, and allows independent stages to continue.
+
+4. CACHING & PERSISTENCE (`backend/app/storage.py` & `db.py`):
+   - Upon pipeline completion, queryable summary metrics (SNR, modulation, symbol rate, 
+     carrier peak, bitstream stats) are saved into relational SQL tables.
+   - The entire complex result dictionary (including decimation vectors for charts, full 
+     constellation points, eye traces, and evidence nodes) is JSON serialized, compressed 
+     with gzip, and saved to `data/cache/<analysis_id>.json.gz`.
+   - The job status changes to `status="done"`.
+
+5. CLIENT RENDERING & REPORT EXPORT:
+   - The React UI polling loop detects `status="done"`.
+   - The UI fetches `GET /api/analysis/{id}/result` (or individual tab endpoints like 
+     `/spectrum`, `/constellation`, `/bitstream`).
+   - `Plotly.js` renders interactive charts on the web page.
+   - When the user clicks "Export PDF", `backend/app/reports.py` reads the cached result 
+     and uses ReportLab to render a multi-page PDF document.
+
+
+================================================================================
+5. ALGORITHMIC & MATHEMATICAL SPECIFICATION OF THE 15 DSP STAGES
+================================================================================
+
+--------------------------------------------------------------------------------
+STAGE 1: FORMAT & CONTAINER DETECTION (`dsp/iqformats.py`)
+--------------------------------------------------------------------------------
+- Purpose: Identify binary layout, data type, byte order, and complex channel structure.
+- Supported Dtypes (7 types):
+  1. `float32`: 32-bit IEEE 754 floating point (-1.0 to +1.0)
+  2. `int16`: Signed 16-bit PCM integer (-32768 to +32767)
+  3. `int8`: Signed 8-bit integer (-128 to +127)
+  4. `uint8`: Unsigned 8-bit offset-binary (0 to 255, zero-point at 128)
+  5. `int32`: Signed 32-bit PCM integer
+  6. `float64`: 64-bit double precision float
+  7. `uint16`: Unsigned 16-bit integer
+- Supported Layouts:
+  - `interleaved`: I0, Q0, I1, Q1, I2, Q2...
+  - `planar`: All I samples followed by all Q samples.
+  - `real_only`: Single real channel (e.g. standard audio WAV), converted to complex via Hilbert transform `scipy.signal.hilbert()`.
+- Detection Logic:
+  - Parses RIFF WAV headers for sample rate (`fmt ` chunk), channels, bit depth.
+  - For raw `.iq`/`.cbin`, evaluates statistical distributions (mean, variance, min/max range, zero-crossing rate) across candidate dtypes to determine the correct binary representation with an explicit confidence score.
+
+--------------------------------------------------------------------------------
+STAGE 2: PREPROCESSING & SIGNAL CLEANING (`dsp/preprocess.py`)
+--------------------------------------------------------------------------------
+- DC Bias Removal: Computes complex mean $\mu = \frac{1}{N} \sum x[n]$ and subtracts it: $x_{dc}[n] = x[n] - \mu$.
+- Linear Detrending: Fits a least-squares linear trend to I and Q rails independently and subtracts it.
+- Power Normalization: Calculates RMS amplitude $A_{rms} = \sqrt{\frac{1}{N} \sum |x[n]|^2}$ and scales signal: $x_{norm}[n] = \frac{x[n]}{A_{rms}}$.
+- Filtering:
+  - Low-pass / Band-pass / High-pass FIR filters designed via SciPy `scipy.signal.firwin` with Kaiser windowing.
+- IQ Imbalance Correction: Estimates phase error $\theta_{err}$ and amplitude error $\alpha_{err}$ between I and Q channels, applying Gram-Schmidt orthogonalization.
+
+--------------------------------------------------------------------------------
+STAGE 3: SPECTRUM & POWER SPECTRAL DENSITY (`dsp/spectrum.py`)
+--------------------------------------------------------------------------------
+- Welch PSD Calculation: Uses `scipy.signal.welch` with segment size $N_{fft} \in [1024, 8192]$, 50% overlap, and Hann windowing:
+  $$P(f) = \frac{1}{K} \sum_{k=1}^K |FFT(x_k[n] \cdot w[n])|^2$$
+- Noise Floor Estimation: Applies a median / 20th-percentile rolling filter across frequency bins to isolate baseline thermal noise $N_0$.
+- Carrier Frequency Peak: Locates frequency $f_c = \arg\max_f P(f)$.
+- Occupied Bandwidth (OBW 99%): Integrates cumulative spectral power $\int_{f_1}^{f_2} P(f) df$ and finds lower bound $f_{low}$ and upper bound $f_{high}$ containing 99% of total integrated power. $OBW = f_{high} - f_{low}$.
+- Spectral SNR: $SNR_{dB} = 10 \log_{10} \left( \frac{P_{peak} - N_0}{N_0} \right)$.
+
+--------------------------------------------------------------------------------
+STAGE 4: WATERFALL SPECTROGRAM (`dsp/waterfall.py`)
+--------------------------------------------------------------------------------
+- Short-Time Fourier Transform (STFT): Computes time-frequency matrix $S(t, f)$ using `scipy.signal.stft` with configurable hop size and FFT length.
+- Visual Decimation: For web display, large matrices (e.g. 10000x2048) are downsampled to bounded dimensions (max 800x400) using max-pooling to preserve transient spectral bursts without lagging the browser.
+
+--------------------------------------------------------------------------------
+STAGE 5: MULTI-EMISSION SIGNAL DETECTION (`dsp/detect.py`)
+--------------------------------------------------------------------------------
+- CFAR (Constant False Alarm Rate) Detector:
+  - Slides a frequency window with Guard Cells and Reference Cells across the PSD.
+  - Cell-Averaging CFAR (CA-CFAR) computes noise threshold $T = \alpha \cdot P_{ref}$.
+  - Smallest-Of CFAR (SO-CFAR) handles closely-spaced adjacent signals by selecting $\min(P_{left}, P_{right})$.
+- Emission Grouping: Contiguous frequency bins exceeding threshold $T$ are merged into discrete signal objects with properties: `{start_time, end_time, center_freq, bandwidth, peak_power, snr}`.
+
+--------------------------------------------------------------------------------
+STAGE 6: PARAMETER EXTRACTION (`dsp/params.py`)
+--------------------------------------------------------------------------------
+- Symbol Rate Estimation ($R_s$): Reconciles 3 independent mathematical estimators:
+  1. Cyclostationary Spectral Line Extraction: Computes FFT of nonlinear signal transformations $|x[n]|^2$ or $|x[n]|$ and searches for discrete cyclic frequency spectral lines.
+  2. Magnitude Autocorrelation Peak Spacing: Computes autocorrelation $R_{xx}[\tau] = \sum |x[n]| |x[n+\tau]|$ and detects periodic peak intervals $\tau_s = 1/R_s$.
+  3. Filterbank Wavelet Energy Fluctuations: Computes derivative of envelope energy to isolate symbol transition edges.
+  - Reconciled Rate: Weighted median of the 3 estimators. If estimators disagree significantly, reports lower confidence.
+- FSK Deviation ($\Delta f$): Analyzes instantaneous frequency histogram $f[n] = \frac{f_s}{2\pi} \frac{d}{dn} \arg(x[n])$ to measure peak frequency separation.
+- PAPR (Peak-to-Average Power Ratio): $PAPR_{dB} = 10 \log_{10} \left( \frac{\max |x[n]|^2}{\frac{1}{N} \sum |x[n]|^2} \right)$.
+
+--------------------------------------------------------------------------------
+STAGE 7: HYBRID MODULATION CLASSIFICATION (`dsp/modulation.py` & `ml/`)
+--------------------------------------------------------------------------------
+- Extracted Feature Vector (18 metrics):
+  - $\gamma_{max}$: Normalized maximum value of spectral density of centered instantaneous series.
+  - $\sigma_{ap}$: Standard deviation of absolute phase centered in non-weak regions.
+  - $\sigma_{dp}$: Standard deviation of direct phase.
+  - $\sigma_{aa}$: Standard deviation of absolute normalized amplitude.
+  - $\mu_{42}^a$: Envelope kurtosis / 4th-order cumulants.
+  - $EVM_{PSK/QAM}$: Error Vector Magnitude against standard constellation grids.
+- Decision Engine Fusion:
+  1. Hard Physical Rules: (e.g. constant amplitude $\implies$ FSK/PSK; discrete phase jumps $\implies$ PSK; two-ring amplitude ratio $\implies$ 16QAM).
+  2. EVM Distance Matching: Calculates RMS distance between symbol points and ideal constellation centroids.
+  3. ML Classifier Vote: `RandomForestClassifier` outputs probability distribution $P(Mod|Features)$.
+  - Composite Confidence: Weighted sum of DSP rule agreement (50%), EVM fit (30%), and ML vote (20%).
+
+--------------------------------------------------------------------------------
+STAGE 8: CONSTELLATION & EYE DIAGRAM ANALYSIS (`dsp/modulation.py`)
+--------------------------------------------------------------------------------
+- Carrier Phase Recovery: Costas loop or M-th power phase locked loop (PLL) tracks residual carrier phase offset $\theta[n]$.
+- Symbol Sampling: Samples cleaned complex envelope at optimum timing instant $n_k = k \cdot T_s + \tau$.
+- EVM Metrics:
+  $$EVM_{RMS} (\%) = \sqrt{ \frac{\frac{1}{M} \sum_{m=1}^M |S_m - \hat{S}_m|^2}{\frac{1}{M} \sum_{m=1}^M |S_{ideal,m}|^2} } \times 100$$
+- Eye Diagram Traces: Overlays symbol periods $2 T_s$ wide to visualize zero-crossing jitter and vertical eye opening height.
+
+--------------------------------------------------------------------------------
+STAGE 9: BLIND DEMODULATION (`dsp/demod.py`)
+--------------------------------------------------------------------------------
+- Carrier Synchronization: Costas loop for PSK; M-th power loop for QAM.
+- Matched Filtering: Root-Raised Cosine (RRC) filter with roll-off factor $\alpha \in [0.2, 0.35]$.
+- Timing Synchronization: Gardner timing error detector (TED) or Mueller-Muller TED adjusts fractional delay interp filter.
+- Decision Boundary Slicing: Maps synchronized complex symbols to nearest constellation point bit patterns, outputting hard bits and soft-decision LRs (Log-Likelihood Ratios).
+
+--------------------------------------------------------------------------------
+STAGE 10: FEC HYPOTHESIS TESTING (`dsp/fec.py`)
+--------------------------------------------------------------------------------
+- Candidate Codes Tested:
+  - Convolutional Codes: Viterbi decoding with rate $r=1/2, 2/3, 3/4$, constraint length $K=7$, generator polynomials $G_1=171_8, G_2=133_8$.
+  - Reed-Solomon Codes: $RS(255, 223)$, $RS(255, 239)$ over $GF(2^8)$.
+- Statistical z-score Verification:
+  - Decodes bitstream with candidate code, re-encodes, and computes Bit Error Rate (BER) reduction against uncoded control baseline.
+  - Computes z-score: $Z = \frac{BER_{uncoded} - BER_{re-encoded}}{\sigma_{baseline}}$.
+  - Code hypothesis is ONLY claimed if $Z > 3.0$ (99.7% statistical confidence).
+
+--------------------------------------------------------------------------------
+STAGE 11: INTERLEAVING HYPOTHESIS TESTING (`dsp/interleave.py`)
+--------------------------------------------------------------------------------
+- Candidate Geometries: Matrix Block Interleaver ($R \times C$), Diagonal Interleaver, Convolutional Interleaver.
+- Search Strategy: Re-orders bit matrix across candidate dimensions $N \in [2, 128]$.
+- Evaluation Metric: Computes bit-matrix dispersion reduction and autocorrelation periodicity enhancement post-deinterleaving.
+- Bounded Execution: Enforces time budget `interleave_time_budget_s` (default 2.0s). If budget expires, returns `truncated=True`.
+
+--------------------------------------------------------------------------------
+STAGE 12: BITSTREAM DIAGNOSTICS (`dsp/bitstream.py`)
+--------------------------------------------------------------------------------
+- Shannon Entropy: Computes byte-level entropy:
+  $$H(X) = - \sum_{i=0}^{255} p(x_i) \log_2 p(x_i)$$
+  - $H \approx 8.0$: High randomness (compressed data, encryption, or raw noise).
+  - $H \approx 1.0 - 4.0$: Structured framed data or text.
+- Bit Bias Ratio: Ratio of 1s to 0s: $R_{bias} = \frac{N_1}{N_0 + N_1}$.
+- Run-Length Distribution: Counts consecutive sequences of identical bits (e.g. 11111).
+- Printable ASCII Candidate Extraction: Scans byte stream for contiguous printable ASCII sequences (character codes 32-126) and calculates printable density score.
+
+--------------------------------------------------------------------------------
+STAGE 13: PATTERN CORRELATION (`dsp/correlate.py`)
+--------------------------------------------------------------------------------
+- FFT-Assisted Cross-Correlation: Computes cross-correlation between bitstream and user-supplied sync word / header pattern $P[n]$ using FFT convolution:
+  $$R_{xy}[k] = IFFT( FFT(X) \cdot FFT(P)^* )$$
+- Preamble Candidate Discovery: Scans bitstream for automatically repeating bit sequences of length $L \in [8, 64]$.
+
+--------------------------------------------------------------------------------
+STAGE 14: MULTI-HYPOTHESIS RANKING & EVIDENCE GRAPH (`dsp/hypothesis.py`)
+--------------------------------------------------------------------------------
+- Multi-Hypothesis Score Formula: Composite score $S_{hyp} \in [0.0, 1.0]$:
+  $$S_{hyp} = 0.30 \cdot Q_{demod} + 0.25 \cdot C_{class} + 0.15 \cdot A_{rate} + 0.10 \cdot F_{spec} + 0.10 \cdot D_{const} + 0.10 \cdot E_{agree}$$
+  - $Q_{demod}$: Demodulator EVM quality score.
+  - $C_{class}$: AMC classifier confidence.
+  - $A_{rate}$: Symbol rate estimator agreement score.
+  - $F_{spec}$: Spectral occupied bandwidth fit.
+  - $D_{const}$: Constellation cluster separation.
+  - $E_{agree}$: Independent evidence source agreement count.
+- Evidence Graph Construction: Nodes represent pipeline stages (Format, Spectrum, Emission, Rate, Modulation, Demod, FEC, Bitstream). Edges represent data transformation dependencies.
+
+--------------------------------------------------------------------------------
+STAGE 15: REPORT GENERATION & PERSISTENCE (`backend/app/reports.py`)
+--------------------------------------------------------------------------------
+- SQL Database Insert: Writes session metadata to `analysis_sessions` SQL table.
+- Cache Storage: Compresses complete analysis dictionary to `data/cache/<analysis_id>.json.gz`.
+- Multi-Format Document Exporters:
+  - PDF: Multi-page document built with ReportLab containing executive tables, spectral parameters, EVM metrics, evidence graph node states, and limitation notes.
+  - JSON: Complete machine-readable hierarchical result tree.
+  - CSV: Tabular parameter matrix for importing into Excel/MATLAB.
+  - TXT: Plaintext summary report for terminal viewing.
+
+
+================================================================================
+6. MACHINE LEARNING MODULATION CLASSIFIER SUBSYSTEM
+================================================================================
+
+Subsystem Location: `ml/`
+Training Script: `ml/train_classifier.py`
+Artifact: `ml/models/modclass.joblib`
+
+MODEL SPECIFICATION:
+- Algorithm: `scikit-learn.ensemble.RandomForestClassifier`
+- Estimators: 100 decision trees
+- Max Depth: 12
+- Feature Vector Size: 18 features (extracted by `dsp/modulation.py`)
+- Target Modulation Classes (9 classes):
+  `BPSK`, `QPSK`, `8PSK`, `16QAM`, `64QAM`, `2FSK`, `GFSK`, `AM`, `FM`
+
+GRACEFUL DEGRADATION ARCHITECTURE:
+- The backend checks for the presence of `ml/models/modclass.joblib` on startup.
+- If the file is missing or scikit-learn is uninstalled, the backend automatically degrades to `DSP-only mode`.
+- In DSP-only mode, modulation classification runs using physical DSP rules and constellation EVM matching alone, returning a warning in the response: `"ml_model_available": false`.
+
+
+================================================================================
+7. FULL REST API REFERENCE & ROUTE CATALOG
+================================================================================
+
+All endpoints require or accept the `x-session-id` header for session scoping.
+
+A. SYSTEM ENDPOINTS (`routes/system.py`):
+  - `GET /api/health`: Health status, system uptime, database connectivity.
+  - `GET /api/capabilities`: List of supported dtypes, modulations, FEC codes, report formats.
+  - `GET /api/stats`: Current session usage statistics (file count, analysis count, storage used).
+
+B. FILE MANAGEMENT & DEMO ENDPOINTS (`routes/files.py`):
+  - `POST /api/upload`: Upload raw `.iq`/`.wav`/`.cbin` signal file. Returns `file_id` and format report.
+  - `GET /api/files`: List files uploaded in current session.
+  - `GET /api/files/{id}`: Retrieve file metadata and format detection details.
+  - `GET /api/files/{id}/preview`: Download downsampled time-domain preview vector.
+  - `DELETE /api/files/{id}`: Delete file and associated caches.
+  - `GET /api/demo`: List bundled demo signals.
+  - `POST /api/demo/{name}`: Copy bundled demo signal into active session.
+
+C. ANALYSIS PIPELINE ENDPOINTS (`routes/analysis.py`):
+  - `POST /api/analyze`: Enqueue guided automatic analysis job. Accepts optional hints (`sample_rate`, `modulation`, `symbol_rate`). Returns `job_id`.
+  - `POST /api/blind-analysis`: Enqueue 100% zero-hint blind analysis job.
+  - `GET /api/jobs/{id}`: Poll background job progress (`queued`, `running`, `done`, `failed`).
+  - `DELETE /api/jobs/{id}`: Cancel running analysis job.
+  - `GET /api/analysis/{id}`: Retrieve analysis summary record.
+  - `GET /api/analysis/{id}/result`: Retrieve complete full analysis payload (cached gzip).
+  - `GET /api/analysis/{id}/spectrum`: Retrieve decimated PSD plot data.
+  - `GET /api/analysis/{id}/spectrogram`: Retrieve decimated STFT waterfall plot matrix.
+  - `GET /api/analysis/{id}/detection`: Retrieve list of detected signal emissions.
+  - `GET /api/analysis/{id}/parameters`: Retrieve extracted parameter record.
+  - `GET /api/analysis/{id}/constellation`: Retrieve constellation points and EVM metrics.
+  - `GET /api/analysis/{id}/eye`: Retrieve eye diagram trace vectors.
+  - `GET /api/analysis/{id}/bitstream`: Retrieve bitstream statistics and ASCII candidates.
+  - `GET /api/analysis/{id}/evidence`: Retrieve Evidence Graph nodes and edges.
+  - `POST /api/analysis/{id}/region`: Re-run analysis pipeline on user-selected time-frequency box.
+  - `POST /api/analysis/{id}/select-signal`: Re-run analysis on specific detected CFAR emission.
+  - `DELETE /api/analysis/{id}`: Delete analysis record and cache file.
+
+D. STANDALONE DSP MODULE ENDPOINTS (`routes/dspops.py` & `routes/modules.py`):
+  - `POST /api/preprocess`: Run standalone DC removal, detrend, filter, or resample.
+  - `POST /api/spectrum`: Run standalone Welch PSD & OBW calculation.
+  - `POST /api/spectrogram`: Run standalone STFT spectrogram.
+  - `POST /api/detect-signals`: Run standalone CFAR signal detector.
+  - `POST /api/extract-parameters`: Run standalone parameter estimation.
+  - `POST /api/modulation/classify`: Run standalone AMC modulation classification.
+  - `POST /api/symbol-rate`: Run standalone symbol rate estimators.
+  - `POST /api/demodulate`: Run standalone demodulator on signal file or analysis ID.
+  - `POST /api/fec/analyze`: Run standalone FEC code hypothesis scan.
+  - `POST /api/interleaving/analyze`: Run standalone de-interleaving geometry search.
+  - `POST /api/bitstream`: Run standalone bitstream diagnostics.
+  - `POST /api/correlation`: Run standalone FFT pattern cross-correlation.
+  - `POST /api/compare`: Run pairwise signal comparison between two analysis IDs.
+
+E. SYNTHETIC GENERATOR & BENCHMARK (`routes/generate.py` & `routes/benchmark.py`):
+  - `POST /api/generate`: Generate synthetic IQ signal with specified modulation, SNR, CFO, symbol rate, FEC, and ground truth.
+  - `POST /api/generator/verify`: Compare recovered bitstream against synthetic ground truth.
+  - `POST /api/benchmark`: Enqueue automated AMC benchmark job across SNR levels.
+  - `GET /api/benchmarks/{id}`: Retrieve benchmark confusion matrix and accuracy metrics.
+
+F. REPORT EXPORT ENDPOINTS (`routes/reports.py`):
+  - `POST /api/analysis/{id}/report`: Renders report in PDF, JSON, CSV, or TXT format. Returns `report_id`.
+  - `GET /api/report/{id}/download`: Download generated report file.
+  - `GET /api/analysis/{id}/report?format=pdf|json|csv|txt`: Stream report on-the-fly.
+
+G. AUTHENTICATION ENDPOINTS (`routes/auth.py`):
+  - `POST /api/auth/register`: Create user account.
+  - `POST /api/auth/login`: Login user and receive Bearer JWT token.
+  - `GET /api/auth/me`: Get current authenticated user profile.
+
+
+================================================================================
+8. FRONTEND ARCHITECTURE & 20-PAGE COMPONENT GUIDE
+================================================================================
+
+The React single-page application is located in `frontend/src/`.
+
+GLOBAL STATE & CONTEXT (`frontend/src/lib/store.tsx`):
+- `AppProvider` wraps the app, managing global state:
+  - `session_id`: Unique UUID created per browser tab/session (`localStorage`).
+  - `files`: List of uploaded files.
+  - `analyses`: List of completed analyses.
+  - `currentAnalysis`: Active analysis object being viewed.
+  - `activeJob`: Currently running background job bar state.
+  - `toasts`: Global notification popups.
+
+20 DEDICATED PAGE VIEWS:
+1. `Landing.tsx` (`/`): Landing overview page with system highlights and quick links.
+2. `Dashboard.tsx` (`/dashboard`): System status dashboard, file counts, recent session activity.
+3. `Analyze.tsx` (`/analyze`): Main analysis hub. File upload dropzone, parameter hint inputs, "Run Analysis" & "Blind Analysis" triggers.
+4. `AnalyzeDetail.tsx` (`/analyze/:id`): Complete analysis results view featuring 10 interactive tabs powered by `ResultView.tsx`.
+5. `Blind.tsx` (`/blind`): Dedicated zero-hint blind analysis trigger page.
+6. `Explorer.tsx` (`/explorer`): Signal format inspector. View raw I/Q samples, override data types, change byte order, inspect header bytes.
+7. `Live.tsx` (`/live`): Live signal monitoring feed page.
+8. `Modulation.tsx` (`/modulation`): Standalone AMC modulation classification playground.
+9. `Demodulation.tsx` (`/demodulation`): Standalone demodulation interface with constellation and bit previews.
+10. `FecInterleave.tsx` (`/fec-interleaving`): Standalone FEC and interleaving hypothesis tester.
+11. `Bitstream.tsx` (`/bitstream`): Bitstream entropy view, byte histogram, run-length charts, printable ASCII text viewer, and pattern search box.
+12. `Compare.tsx` (`/compare`): Pairwise signal comparator comparing two analyses side-by-side.
+13. `Generator.tsx` (`/generator`): Synthetic IQ signal generator control panel. Configure modulation, SNR, CFO, symbol rate, fading, and download generated `.iq` files.
+14. `Benchmark.tsx` (`/benchmark`): Self-benchmark runner and interactive confusion matrix viewer.
+15. `History.tsx` (`/history`): Historical log of all past analyses in current session.
+16. `Reports.tsx` (`/reports`): Report manager page. View, build, and download PDF, JSON, CSV, and TXT reports.
+17. `Demo.tsx` (`/demo`): SIH 8-Step Live Judge Demonstration Mode.
+18. `Documentation.tsx` (`/documentation`): Built-in viewer for repository documentation markdown files.
+19. `Settings.tsx` (`/settings`): App settings, storage cleanup triggers, API URL configuration.
+20. `Login.tsx` (`/login`): User login and registration form page.
+
+
+================================================================================
+9. SYNTHETIC GENERATOR & SELF-BENCHMARKING ENGINE
+================================================================================
+
+SYNTHETIC SIGNAL GENERATOR (`dsp/synth.py`):
+- Generates mathematically precise IQ signals with exact ground truth for validation.
+- Configurable Parameters:
+  - Modulations: BPSK, QPSK, 8PSK, 16QAM, 64QAM, 2FSK, GFSK, AM, FM.
+  - Sample Rate ($f_s$) & Symbol Rate ($R_s$).
+  - Pulse Shaping: Root-Raised Cosine (RRC), Raised Cosine (RC), Rectangular, Gaussian (for GFSK).
+  - Impairments: AWGN Noise (configurable SNR in dB), Carrier Frequency Offset (CFO in Hz), Phase Noise, Symbol Timing Jitter, Rayleigh/Rician Multipath Fading.
+  - Data Payload: Pseudo-Random Binary Sequence (PRBS-9, PRBS-15) or custom ASCII text.
+  - FEC / Interleaver: Optional Convolutional encoding and block matrix interleaving.
+- Ground Truth File (`GROUND_TRUTH.json`): Saves exact parameters alongside generated files for 100% verifiable evaluation.
+
+AUTOMATED BENCHMARKING ENGINE (`dsp/benchmark.py`):
+- Runs automated AMC classification benchmarks across multiple modulations and SNR steps (e.g., -5 dB to +20 dB).
+- Evaluates classification accuracy against synthetic ground truth.
+- Generates a 2D Confusion Matrix (True Modulation vs Predicted Modulation).
+- Results displayed interactively in `Benchmark.tsx`.
+
+
+================================================================================
+10. DATABASE SCHEMA & PERSISTENCE MODEL
+================================================================================
+
+Database File: `data/app.db` (SQLite default) or PostgreSQL via `SIH_DATABASE_URL`.
+
+RELATIONAL TABLES (15 Tables):
+1. `users`: User accounts (`id`, `email`, `hashed_password`, `created_at`).
+2. `upload_files`: Stored files (`id`, `session_id`, `filename`, `filepath`, `filesize`, `container`, `dtype`, `sample_rate`, `created_at`).
+3. `analysis_sessions`: Analysis records (`id`, `session_id`, `file_id`, `status`, `modulation`, `confidence`, `symbol_rate`, `snr`, `created_at`).
+4. `signal_emissions`: Detected CFAR emissions (`id`, `analysis_id`, `center_freq`, `bandwidth`, `snr`, `peak_power`).
+5. `parameter_estimates`: Extracted parameters (`id`, `analysis_id`, `name`, `value`, `confidence`, `method`, `status`).
+6. `modulation_hypotheses`: Ranked AMC candidates (`id`, `analysis_id`, `modulation`, `confidence`, `evm`).
+7. `fec_hypotheses`: FEC code candidate results (`id`, `analysis_id`, `code_name`, `z_score`, `ber_reduction`).
+8. `interleaver_hypotheses`: De-interleaving test results (`id`, `analysis_id`, `geometry`, `z_score`).
+9. `bitstream_summaries`: Bitstream metrics (`id`, `analysis_id`, `entropy`, `bit_bias`, `printable_ascii`).
+10. `evidence_nodes`: Evidence graph nodes (`id`, `analysis_id`, `stage_name`, `status`, `confidence`, `summary`).
+11. `evidence_edges`: Evidence graph edges (`id`, `analysis_id`, `source_node`, `target_node`).
+12. `generated_signals`: Synthetic signal records (`id`, `filename`, `modulation`, `snr`, `ground_truth_json`).
+13. `benchmark_runs`: Benchmark executions (`id`, `session_id`, `accuracy`, `total_cases`, `created_at`).
+14. `reports`: Built report records (`id`, `analysis_id`, `format`, `filepath`, `created_at`).
+15. `system_logs`: Log events (`id`, `level`, `message`, `timestamp`).
+
+
+================================================================================
+11. DEPLOYMENT, DOCKER & VERIFICATION GUIDE
+================================================================================
+
+1. DOCKER COMPOSE DEPLOYMENT (Recommended):
+   ```bash
+   # Build and start all services in container
+   docker compose up --build
+   ```
+   - Access Web UI & API at: `http://localhost:8000`
+   - Access Swagger API Docs at: `http://localhost:8000/docs`
+   - Access Documentation at: `http://localhost:8000/documentation`
+
+2. LOCAL DEVELOPMENT SETUP:
+   ```bash
+   # Step 1: Install Python dependencies
+   pip install -r requirements.txt
+
+   # Step 2: Launch FastAPI backend server (port 8000)
+   python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000
+
+   # Step 3: Launch Frontend Vite dev server (port 5173) in a second terminal
+   cd frontend
+   npm install
+   npm run dev
+   ```
+   - Open browser at `http://localhost:5173` (Vite proxies `/api` requests to backend at 8000).
+
+3. PRODUCTION SINGLE-ORIGIN BUILD:
+   ```bash
+   # Step 1: Build production frontend bundle
+   cd frontend && npm install && npm run build
+
+   # Step 2: Start backend server (FastAPI serves built frontend from frontend/dist)
+   python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000
+   ```
+   - Open browser at `http://localhost:8000`.
+
+4. RUNNING AUTOMATED TEST SUITE:
+   ```bash
+   # Run Pytest unit tests (29 tests)
+   pytest
+
+   # Run End-to-End API Smoke Tests (77 checks)
+   python tests/smoke_api.py
+   ```
+
+================================================================================
+  END OF MASTER SYSTEM DOCUMENTATION & TECHNICAL HANDBOOK
+================================================================================
