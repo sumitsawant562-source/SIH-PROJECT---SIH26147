@@ -1,8 +1,11 @@
-from fastapi import FastAPI
+from http.server import BaseHTTPRequestHandler
+import json
 
-app = FastAPI()
-
-@app.get("/api/health")
-@app.get("/health")
-def health():
-    return {"status": "ok", "version": "1.0.0", "provider": "vercel-serverless"}
+class handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.end_headers()
+        response = {"status": "ok", "message": "Vercel Python Serverless Function Active", "path": self.path}
+        self.wfile.write(json.dumps(response).encode('utf-8'))
+        return
