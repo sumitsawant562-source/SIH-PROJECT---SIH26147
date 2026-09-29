@@ -41,13 +41,20 @@ Conventions used by every endpoint:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    init_db()
-    settings.ensure_dirs()
-    docs_mod.sync_index()          # docs/index.json is derived state, refreshed on every start
-    job_manager.start()
-    app.state.started_at = time.time()
+    try:
+        init_db()
+        settings.ensure_dirs()
+        docs_mod.sync_index()          # docs/index.json is derived state, refreshed on every start
+        job_manager.start()
+        app.state.started_at = time.time()
+    except Exception as exc:
+        print(f"Lifespan startup warning: {exc}")
     yield
-    job_manager.stop()
+    try:
+        job_manager.stop()
+    except Exception:
+        pass
+
 
 
 def create_app() -> FastAPI:

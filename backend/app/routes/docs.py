@@ -38,9 +38,13 @@ MAX_BYTES = 512 * 1024
 def docs_root() -> Path:
     """Documentation root: ``SIH_DOCS_DIR`` when set, otherwise ``<repo>/docs``."""
     configured = os.environ.get("SIH_DOCS_DIR") or getattr(settings, "docs_dir", "")
-    if configured:
+    if configured and os.path.exists(configured):
         return Path(configured).resolve()
-    return (Path(settings.data_dir).resolve().parent / "docs").resolve()
+    base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+    repo_docs = (Path(base_dir) / "docs").resolve()
+    if repo_docs.is_dir():
+        return repo_docs
+    return Path(settings.data_dir).resolve()
 
 
 def _title_and_summary(path: Path) -> tuple[str, str]:
@@ -93,15 +97,15 @@ def build_index() -> dict:
 
 def sync_index() -> Path | None:
     """Write ``docs/index.json`` from the markdown files.  Never fatal, never load-bearing."""
-    root = docs_root()
-    if not root.is_dir():
-        return None
-    path = root / INDEX_NAME
-    payload = build_index()
-    payload["note"] = ("generated from the markdown files in this folder at API start-up; the "
-                       "documents are the source of truth, this index only lists them")
-    payload["read_by"] = {"ui": "/documentation/index.json", "api": "/api/docs"}
     try:
+        root = docs_root()
+        if not root.is_dir():
+            return None
+        path = root / INDEX_NAME
+        payload = build_index()
+        payload["note"] = ("generated from the markdown files in this folder at API start-up; the "
+                           "documents are the source of truth, this index only lists them")
+        payload["read_by"] = {"ui": "/documentation/index.json", "api": "/api/docs"}
         if path.exists():
             try:
                 if json.loads(path.read_text(encoding="utf-8")).get("count") == payload["count"] and \
@@ -110,9 +114,10 @@ def sync_index() -> Path | None:
             except Exception:
                 pass
         path.write_text(json.dumps(payload, indent=1) + "\n", encoding="utf-8")
-    except OSError:                                                       # pragma: no cover
+        return path
+    except Exception:
         return None
-    return path
+
 
 
 def _resolve(doc_id: str) -> Path:
