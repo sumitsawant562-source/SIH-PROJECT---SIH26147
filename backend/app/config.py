@@ -9,7 +9,20 @@ import os
 from dataclasses import dataclass, field
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-DATA_DIR = os.environ.get("SIH_DATA_DIR", os.path.join(BASE_DIR, "data"))
+
+def _default_data_dir() -> str:
+    if os.environ.get("SIH_DATA_DIR"):
+        return os.environ["SIH_DATA_DIR"]
+    if os.environ.get("VERCEL") or os.environ.get("AWS_EXECUTION_ENV"):
+        return "/tmp/data"
+    try:
+        data_path = os.path.join(BASE_DIR, "data")
+        os.makedirs(data_path, exist_ok=True)
+        return data_path
+    except Exception:
+        return "/tmp/data"
+
+DATA_DIR = _default_data_dir()
 
 
 def _flag(name: str, default: str = "1") -> bool:
@@ -58,7 +71,11 @@ class Settings:
     def ensure_dirs(self) -> None:
         for d in (self.data_dir, self.upload_dir, self.generated_dir, self.report_dir,
                   self.cache_dir):
-            os.makedirs(d, exist_ok=True)
+            try:
+                os.makedirs(d, exist_ok=True)
+            except Exception:
+                pass
+
 
 
 settings = Settings()
