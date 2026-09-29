@@ -5,7 +5,9 @@
   "functions": {
     "api/index.py": {
       "memory": 1024,
-      "maxDuration": 60
+      "maxDuration": 60,
+      "includeFiles": "{backend/**,dsp/**}",
+      "excludeFiles": "{frontend/**,docs/**,tests/**,sample_data/**,docker/**,ml/**,*.txt,*.md}"
     }
   },
   "rewrites": [
