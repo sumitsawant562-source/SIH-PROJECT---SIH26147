@@ -1,5 +1,7 @@
 import os
 import sys
+import asyncio
+from http.server import BaseHTTPRequestHandler
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BASE_DIR not in sys.path:
@@ -8,45 +10,70 @@ if BASE_DIR not in sys.path:
 os.environ.setdefault("SIH_DATA_DIR", "/tmp/data")
 os.environ.setdefault("SIH_SYNC_JOBS", "1")
 
-from http.server import BaseHTTPRequestHandler
 from backend.app.main import app
-from fastapi.testclient import TestClient
-
-client = TestClient(app)
 
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        self._dispatch("GET")
+        self._handle()
 
     def do_POST(self):
-        self._dispatch("POST")
+        self._handle()
 
     def do_PUT(self):
-        self._dispatch("PUT")
+        self._handle()
 
     def do_DELETE(self):
-        self._dispatch("DELETE")
+        self._handle()
 
     def do_OPTIONS(self):
-        self._dispatch("OPTIONS")
+        self._handle()
 
-    def _dispatch(self, method: str):
+    def _handle(self):
         content_length = int(self.headers.get('Content-Length', 0))
-        body = self.rfile.read(content_length) if content_length > 0 else None
+        body = self.rfile.read(content_length) if content_length > 0 else b""
         
-        req_headers = {k: v for k, v in self.headers.items()}
+        path = self.path
+        if not path.startswith("/api"):
+            path = "/api" + (path if path.startswith("/") else "/" + path)
+            
+        scope = {
+            "type": "http",
+            "asgi": {"version": "3.0", "spec_version": "2.0"},
+            "http_version": "1.1",
+            "method": self.command,
+            "scheme": "https",
+            "path": path,
+            "raw_path": path.encode("utf-8"),
+            "query_string": b"",
+            "headers": [(k.lower().encode("utf-8"), v.encode("utf-8")) for k, v in self.headers.items()],
+            "client": self.client_address,
+            "server": ("127.0.0.1", 80),
+        }
         
-        resp = client.request(
-            method,
-            self.path,
-            headers=req_headers,
-            content=body
-        )
+        response_status = 200
+        response_headers = []
+        response_body = bytearray()
         
-        self.send_response(resp.status_code)
-        for k, v in resp.headers.items():
-            if k.lower() not in ("content-length", "transfer-encoding", "content-encoding"):
-                self.send_header(k, v)
-        self.send_header("Content-Length", str(len(resp.content)))
+        async def receive():
+            return {"type": "http.request", "body": body, "more_body": False}
+
+        async def send(message):
+            nonlocal response_status, response_headers, response_body
+            if message["type"] == "http.response.start":
+                response_status = message["status"]
+                response_headers = message.get("headers", [])
+            elif message["type"] == "http.response.body":
+                response_body.extend(message.get("body", b""))
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(app(scope, receive, send))
+        finally:
+            loop.close()
+
+        self.send_response(response_status)
+        for k, v in response_headers:
+            self.send_header(k.decode("utf-8"), v.decode("utf-8"))
         self.end_headers()
-        self.wfile.write(resp.content)
+        self.wfile.write(bytes(response_body))
