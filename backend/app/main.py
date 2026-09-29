@@ -99,7 +99,7 @@ def create_app() -> FastAPI:
                   name="documentation")
 
     dist = settings.frontend_dist
-    if os.path.isdir(dist) and os.path.exists(os.path.join(dist, "index.html")):
+    if not os.environ.get("VERCEL") and os.path.isdir(dist) and os.path.exists(os.path.join(dist, "index.html")):
         class SPAStaticFiles(StaticFiles):
             """Static files with a single-page-application fallback.
 
@@ -127,13 +127,14 @@ def create_app() -> FastAPI:
                 return response
 
         app.mount("/", SPAStaticFiles(directory=dist, html=True), name="frontend")
-    else:
+    elif not os.environ.get("VERCEL"):
         @app.get("/", include_in_schema=False)
         def no_frontend() -> dict:
             return {"message": "the API is running but no front-end build was found",
                     "build_it_with": "cd frontend && npm install && npm run build",
                     "api_docs": "/docs"}
     return app
+
 
 
 app = create_app()
