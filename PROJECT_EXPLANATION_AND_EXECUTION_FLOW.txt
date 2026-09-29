@@ -1,0 +1,308 @@
+================================================================================
+  SIH26147: AUTOMATED MODEL FOR ANALYSIS OF .IQ AND .WAV FILES 
+            ALONG WITH SIGNAL PARAMETER EXTRACTION
+================================================================================
+                  PROJECT OVERVIEW, EXECUTION FLOW & 
+                  JUDGE / AUDIENCE PRESENTATION GUIDE
+================================================================================
+
+--------------------------------------------------------------------------------
+1. EXECUTIVE SUMMARY & PROJECT PURPOSE
+--------------------------------------------------------------------------------
+Problem Statement (SIH26147):
+  "Automated Model for Analysis of .IQ and .WAV Files Along with Signal Parameter 
+   Extraction"
+
+Core Mission:
+  Provide a fully automated, inspectable, end-to-end Signal Intelligence (SIGINT) 
+  and Radio Frequency (RF) analysis platform. The platform ingests raw RF signal 
+  captures (.iq, .wav, complex binary), automatically detects formats, cleans signals,
+  computes spectral attributes, isolates multi-signal emissions, extracts key parameters, 
+  classifies modulation schemes (via hybrid DSP rules + ML vote), performs blind 
+  demodulation, tests FEC & interleaving hypotheses, analyzes raw bitstreams, and 
+  exports comprehensive reports.
+
+Key Principles:
+  1. Inspectability & Evidence: Every number is derived deterministically from the 
+     uploaded bytes via SciPy/NumPy estimators. No chart is decorative; every 
+     statement carries evidence and confidence bounds.
+  2. Honest Uncertainty Handling: If a parameter cannot be reliably estimated, 
+     the system explicitly sets `status="unable"` with `value=null` and states the 
+     reason rather than outputting bogus values.
+  3. No Black-Box "AI Magic": Modulation classification uses a hybrid decision matrix: 
+     measured constellation EVM + physical DSP rules + spectral statistics + an 
+     optional scikit-learn RandomForest classifier vote.
+
+
+--------------------------------------------------------------------------------
+2. SYSTEM ARCHITECTURE & TECH STACK
+--------------------------------------------------------------------------------
+
+  +--------------------------------------------------------------------------+
+  |  FRONTEND LAYER (Single Page Application - React 18 + TypeScript + Vite)  |
+  |  - Interactive Plotly charts (Spectrum, Waterfall, Constellation, Eye)    |
+  |  - Dark RF-lab aesthetic with 20+ dedicated views/pages                   |
+  |  - Session management via `x-session-id` HTTP headers                    |
+  +------------------------------------v-------------------------------------+
+                                       | HTTP REST API / JSON
+  +------------------------------------v-------------------------------------+
+  |  BACKEND API LAYER (FastAPI + Uvicorn)                                   |
+  |  - Asynchronous Job Queue System (Worker thread pool with progress)      |
+  |  - Session-scoped Data Access & Input Sanitization                       |
+  |  - Multi-format Report Generation (ReportLab PDF, JSON, CSV, TXT)        |
+  +--------+---------------------------+--------------------------+----------+
+           |                           |                          |
+           v                           v                          v
+  +-----------------+        +------------------+       +-------------------+
+  |  DSP ENGINE     |        |  ML CLASSIFIER   |       |  STORAGE LAYER    |
+  |  (NumPy / SciPy)|        |  (scikit-learn)  |       |  - SQLite/Postgres|
+  |  15-stage       |        |  RandomForest    |       |  - Uploads stream |
+  |  Pipeline       |        |  Modulation Vote |       |  - Gzip Result    |
+  +-----------------+        +------------------+       |    Cache (.json.gz|
+                                                        +-------------------+
+
+Tech Stack Details:
+  - Backend: FastAPI, Uvicorn, Pydantic v2, SQLAlchemy 2.0, ReportLab
+  - Frontend: React 18, TypeScript, Vite, Plotly.js, Lucide Icons, Tailwind CSS
+  - DSP Core: NumPy, SciPy (Welch PSD, STFT, CFAR detection, Cyclostationary estimation, Viterbi/Reed-Solomon decoding)
+  - Machine Learning: scikit-learn (RandomForest classifier on spectral/constellation feature vectors)
+  - Database: SQLite (`data/app.db`) for lightweight local run; PostgreSQL supported via `SIH_DATABASE_URL`
+
+
+--------------------------------------------------------------------------------
+3. END-TO-END FLOW OF EXECUTION
+--------------------------------------------------------------------------------
+
+When a user drops an RF capture file into the application, the execution flow follows 
+15 distinct pipeline stages from raw bytes to final report generation:
+
+STAGE 1: FILE INGESTION & FORMAT DETECTION (`dsp/iqformats.py`)
+  1. File is uploaded via `POST /api/upload`, streamed to `data/uploads/<uuid>.<ext>`, 
+     and validated for size limits (`SIH_MAX_UPLOAD_MB`).
+  2. `iqformats.detect_format` inspects container headers (.wav RIFF vs raw binary .iq/.cbin).
+  3. Identifies data type (7 candidates: float32, int16, int8, uint8, int32, float64, etc.), 
+     interleaving structure (interleaved I/Q vs planar/separate I & Q), and byte order (little vs big endian).
+  4. Returns detected container metadata, sample rate hint, center frequency hint, and detection confidence.
+
+STAGE 2: PREPROCESSING (`dsp/preprocess.py`)
+  1. Computes mean DC bias and trend; applies zero-mean DC removal and linear detrending.
+  2. Normalizes sample power/amplitude to unit energy.
+  3. Evaluates low-pass, band-pass, high-pass filtering, denoising, and resampling requirements.
+  4. Produces cleaned I/Q sample arrays along with before/after metrics (SNR improvement, DC shift).
+
+STAGE 3: SPECTRUM & PSD ANALYSIS (`dsp/spectrum.py`)
+  1. Computes Welch's Power Spectral Density (PSD) using optimal FFT segment lengths and windowing.
+  2. Locates dominant carrier frequency peak and measures noise floor level (median/percentile filtering).
+  3. Estimates Occupied Bandwidth (OBW at 99% energy power), 3 dB bandwidth, and spectral SNR.
+  4. Evaluates spectral shape metrics (flatness, kurtosis, asymmetry).
+
+STAGE 4: WATERFALL & STFT SPECTROGRAM (`dsp/waterfall.py`)
+  1. Computes Short-Time Fourier Transform (STFT) matrix across time vs frequency.
+  2. Downsamples payload intelligently for UI plotting decimation while retaining full precision for DSP.
+  3. Enables regional time-frequency windowing for click-to-analyze segment extraction.
+
+STAGE 5: MULTI-EMISSION DETECTION (`dsp/detect.py`)
+  1. Applies CFAR (Cell-Averaging / Smallest-Of Constant False Alarm Rate) thresholding across frequency bins.
+  2. Isolates distinct signal emissions: start/end time, lower/upper frequency bounds, bandwidth, center frequency, peak power, and SNR.
+  3. If no signals exceed CFAR threshold, returns `signal_count: 0` without inventing false emissions.
+
+STAGE 6: PARAMETER ESTIMATION (`dsp/params.py`)
+  1. Symbol Rate Estimation: Evaluates 3 independent algorithms:
+     a) Cyclostationary spectral correlation (FFT of magnitude / squared signal).
+     b) Autocorrelation peak spacing of magnitude / derivative.
+     c) Continuous Wavelet / filterbank energy fluctuations.
+     Reconciles all 3 estimators; returns value + confidence + agreement evidence.
+  2. FSK Deviation & Modulation Index: Measures frequency peak offsets in instantaneous frequency histogram.
+  3. Amplitude & Phase Statistics: Calculates envelope crest factor, phase variance, and peak-to-average power ratio (PAPR).
+
+STAGE 7: HYBRID MODULATION CLASSIFICATION (`dsp/modulation.py` & `ml/train_classifier.py`)
+  1. Feature Extraction: Extracts 18+ statistical, spectral, and phase features (instantaneous phase derivative, envelope variance, constellation symmetry, etc.).
+  2. DSP Rule Engine: Checks physical constraints (e.g. constant envelope -> FSK/PSK; phase discrete steps -> PSK/QAM).
+  3. Constellation EVM Evaluation: Evaluates candidate symbol constellations (BPSK, QPSK, 8PSK, 16QAM, 64QAM) and calculates Error Vector Magnitude (EVM).
+  4. ML Model Vote (Optional): Passes feature vector to scikit-learn RandomForest model (`ml/models/modclass.joblib`) for probability distribution across modulations.
+  5. Decision Fusion: Combines DSP rules, EVM scores, and ML vote into a ranked candidate list with confidence scores.
+
+STAGE 8: CONSTELLATION & EYE DIAGRAM ANALYSIS (`dsp/modulation.py` & `dsp/demod.py`)
+  1. Recovers carrier phase/offset and timing synchronization.
+  2. Extracts raw, filtered, and symbol-sampled constellation points.
+  3. Calculates EVM (% RMS and Peak), phase error, and amplitude imbalance.
+  4. Generates eye diagram traces to assess symbol timing jitter and vertical eye opening.
+
+STAGE 9: BLIND DEMODULATION (`dsp/demod.py`)
+  1. Executes modulation-specific demodulator (BPSK, QPSK, 8PSK, 16QAM, 64QAM, 2FSK, GFSK, AM, FM).
+  2. Applies carrier recovery loop (Costas loop / M-th power loop), matched filtering (Root-Raised Cosine), and Gardner/Mueller-Muller symbol timing recovery.
+  3. Reports per-stage lock status (carrier lock, timing lock) and outputs raw hard-decision and soft-decision bitstreams.
+
+STAGE 10: FEC HYPOTHESIS TESTING (`dsp/fec.py`)
+  1. Tests bitstream against multiple Forward Error Correction (FEC) codes:
+     - Convolutional Codes (Viterbi decoding with rates 1/2, 2/3, 3/4, polynomials K=7).
+     - Reed-Solomon (RS(255,223), RS(255,239)).
+     - Concatenated RS + Convolutional.
+  2. Compares syndrome check / bit error rate improvement against a null (uncoded) baseline.
+  3. Calculates z-score significance; only claims FEC if test beats null baseline by a statistically significant margin.
+
+STAGE 11: INTERLEAVING HYPOTHESIS TESTING (`dsp/interleave.py`)
+  1. Tests de-interleaving geometry hypotheses (Block interleavers, Convolutional interleavers, Matrix depth/span).
+  2. Measures dispersion reduction and periodicity improvement after matrix transpose.
+  3. Enforces a strict time budget (`interleave_time_budget_s`) to avoid infinite search loops; returns `truncated: true` if budget limit reached.
+
+STAGE 12: BITSTREAM ANALYSIS (`dsp/bitstream.py`)
+  1. Computes Shannon Entropy per bit/byte (0.0 = total predictability, 8.0 = pure noise/encryption).
+  2. Calculates byte frequency histogram, 0/1 bit bias ratio, and run-length statistics.
+  3. Identifies framing periodicities and extracts printable-ASCII candidate text strings.
+
+STAGE 13: CORRELATION & PATTERN SEARCH (`dsp/correlate.py`)
+  1. Performs FFT-assisted cross-correlation against user-defined hex/text/bit patterns.
+  2. Automatically searches for repeated preamble/sync word candidates across the bitstream.
+
+STAGE 14: MULTI-HYPOTHESIS RANKING & EVIDENCE GRAPH (`dsp/hypothesis.py` & `dsp/pipeline.py`)
+  1. Ranks complete pipeline candidates (Modulation + Symbol Rate + FEC) based on composite weighting:
+     - Demodulator EVM/Quality (30%)
+     - Classifier Confidence (25%)
+     - Symbol Rate Consistency across estimators (15%)
+     - Spectral Fit / OBW match (10%)
+     - Constellation Cluster Separation (10%)
+     - Multi-source Evidence Agreement (10%)
+  2. Constructs 3D Evidence Graph (Nodes = stages/measurements, Edges = data dependencies).
+
+STAGE 15: REPORT GENERATION & PERSISTENCE (`backend/app/reports.py` & `backend/app/db.py`)
+  1. Saves queryable metadata into relational DB (`data/app.db`).
+  2. Compresses full result JSON dictionary to `data/cache/<analysis_id>.json.gz`.
+  3. Renders exportable reports on demand:
+     - PDF Report (Professional multi-page layout via ReportLab)
+     - JSON (Machine-readable full analysis tree)
+     - CSV (Key parameters table)
+     - TXT (Concise executive summary text file)
+
+
+--------------------------------------------------------------------------------
+4. DETAILED MODULE-BY-MODULE CODE MAP
+--------------------------------------------------------------------------------
+
+Directory: `dsp/`
+  - `iqformats.py`: Format detection engine, binary sample parsing, sample rate / center frequency metadata extraction.
+  - `preprocess.py`: Filtering, DC offset removal, detrending, IQ imbalance correction, power normalization.
+  - `spectrum.py`: Welch PSD, occupied bandwidth, noise floor estimation, SNR calculation, spectral shape metrics.
+  - `waterfall.py`: STFT spectrogram computation, downsampling decimation, ROI (region of interest) extraction.
+  - `detect.py`: CFAR multi-emission detector, signal grouping, emission boundary extraction.
+  - `params.py`: Symbol rate estimators (cyclostationary, autocorrelation, wavelet), deviation, PAPR, amplitude/phase statistics.
+  - `modulation.py`: Hybrid AMC classifier, feature extraction, EVM calculation, eye diagram trace builder.
+  - `demod.py`: Modular digital & analog demodulators (PSK, QAM, FSK, AM, FM) with carrier and symbol synchronization.
+  - `fec.py`: Convolutional/Viterbi, Reed-Solomon, and concatenated code hypothesis testing and syndrome verification.
+  - `interleave.py`: Matrix block & convolutional de-interleaver search, dispersion z-score evaluation.
+  - `bitstream.py`: Bit/byte entropy, bit bias, run lengths, frame framing periodicity, printable ASCII extraction.
+  - `correlate.py`: FFT cross-correlation, pattern locator, sync word candidate discovery.
+  - `hypothesis.py`: Multi-hypothesis pipeline candidate scoring & composite ranking engine.
+  - `compare.py`: Spectral, parameter, and bitstream comparison between two distinct analysis sessions.
+  - `synth.py`: Synthetic IQ signal generator (supports all modulations, noise, fading, CFO, symbol jitter, ground truth).
+  - `benchmark.py`: Automated self-benchmark harness across SNR levels with confusion matrix generation.
+  - `pipeline.py`: Main orchestrator (`analyse_record`), stage execution recorder, evidence graph generator.
+
+Directory: `backend/app/`
+  - `main.py`: FastAPI initialization, lifespan management, static file mounting (documentation & frontend SPA).
+  - `routes/`: REST API controllers (`files.py`, `analysis.py`, `modules.py`, `dspops.py`, `generate.py`, `benchmark.py`, `reports.py`, `auth.py`, `system.py`, `docs.py`).
+  - `services.py`: Business logic, DB operations, async job management interface.
+  - `jobs.py`: Thread pool worker for non-blocking asynchronous analysis jobs with progress updates.
+  - `storage.py`: Disk I/O management for uploads, generated signals, and gzip result caches.
+  - `reports.py`: PDF document builder using ReportLab with custom styling and table generators.
+
+Directory: `frontend/src/`
+  - `App.tsx`: React router setup, layout wrapper, global toast & job progress bar.
+  - `pages/`: 20 UI views (Dashboard, Analyze, Live, Explorer, Blind, Modulation, Demodulation, FEC/Interleaving, Bitstream, Compare, Generator, Benchmark, History, Reports, Settings, Documentation, SIH Demo).
+  - `components/`: Plotly wrappers, ResultView tabs, EvidenceGraph 3D visualizer, RunPanel.
+  - `lib/api.ts`: Axios/Fetch client wrapper with `x-session-id` session header and polling utilities.
+
+
+--------------------------------------------------------------------------------
+5. HOW TO EXPLAIN THIS PROJECT TO JUDGES / AUDIENCE
+--------------------------------------------------------------------------------
+
+A. THE 1-MINUTE ELEVATOR PITCH:
+   "Our platform solves Problem SIH26147 by providing a complete, automated end-to-end 
+    RF Signal Intelligence solution. When an unknown .IQ or .WAV signal file is uploaded, 
+    our system automatically detects sample formats, removes noise, computes power spectra, 
+    detects multiple emissions, extracts symbol rates and key parameters, classifies modulation 
+    using a hybrid DSP-plus-ML engine, demodulates blind, tests FEC and interleaving hypotheses, 
+    and analyzes the underlying bitstream. Every measurement carries explicit confidence bounds 
+    and inspectable mathematical evidence—ensuring 100% transparency with zero black-box magic 
+    or fabricated metadata."
+
+B. THE 5-MINUTE DEEP DIVE:
+   1. Highlight Problem & Complexity: Explain that real-world RF captures lack metadata, have 
+      varying data types (int16, float32, WAV RIFF), contain multiple signals, noise, carrier offsets, 
+      and unknown modulation schemes.
+   2. Show the Honest Engineering: Explain why our system is NOT just a basic neural network wrapper. 
+      Neural networks hallucinate on out-of-distribution signals. Instead, we built a 15-stage 
+      DSP pipeline supported by SciPy/NumPy, where ML is only an optional voting contributor.
+   3. Explain the Blind Analysis Capability: Demonstrate how the system needs ZERO hints from the 
+      user—it estimates symbol rate via 3 reconciled algorithms, recovers carrier lock, detects FEC 
+      codes via z-score statistical testing, and de-interleaves matrices automatically.
+   4. Showcase Evidence Graph & Multi-Hypothesis Ranking: Show that instead of giving a single 
+      arbitrary output, the system ranks multiple candidate pipelines (e.g. QPSK vs 16QAM) with exact 
+      score breakdowns (EVM quality, spectral fit, rate consistency) and renders an interactive 
+      3D Evidence Graph.
+   5. Demonstrate Results & Reports: Show the multi-format export capability (PDF, JSON, CSV, TXT) 
+      and the live synthetic generator with ground-truth verification.
+
+C. STEP-BY-STEP LIVE DEMO GUIDE (SIH DEMO MODE):
+   Open: http://localhost:8000/demo
+   
+   Step 1 (Problem): Point out the SIH26147 problem statement and honest non-claims.
+   Step 2 (Upload): Select `sample_qpsk.wav` from bundled demo files. Show that the system 
+          automatically detects container format, sample rate, and byte structure.
+   Step 3 (Automatic Analysis): Click "Run automatic analysis". Show the live stage progress bar 
+          working asynchronously in the background.
+   Step 4 (AI/DSP Reasoning): Show the reasoning breakdown—DSP rules fired, EVM per modulation, 
+          symbol rate agreement across 3 estimators, and ML vote accuracy.
+   Step 5 (3D Pipeline Visualisation): Walk through the Evidence Graph showing data flow from raw IQ 
+          to decoded bitstream.
+   Step 6 (Results): Inspect the interactive Plotly spectrum (peak, OBW, SNR), STFT waterfall 
+          (drag & drop region re-analysis), QPSK constellation EVM, eye diagram, FEC syndrome checks, 
+          and bitstream entropy.
+   Step 7 (Innovation): Highlight key innovations: blind pipeline, multi-hypothesis ranking, 
+          z-score FEC testing, live signal generator.
+   Step 8 (Benchmark & Report): Show the live AMC confusion matrix generated against ground truth, 
+          then click "Build Report" to download the PDF.
+
+D. HANDLING HARD TECHNICAL QUESTIONS:
+   Q: "What happens if the uploaded file is corrupt or noise-only?"
+   A: "The system does not crash or invent false signals. It marks detection as 0 emissions, 
+       sets parameters to `status="unable"` with `value=null`, and clearly explains the failure reason."
+
+   Q: "Why use a hybrid model instead of Deep Learning / CNNs for AMC?"
+   A: "Pure deep learning models act as black boxes, fail under varying SNR/CFO conditions, and require 
+       massive GPU compute. Our hybrid engine relies on fundamental physical properties (envelope variance, 
+       phase derivative, EVM) combined with a lightweight RandomForest model, running at high speed 
+       on CPU with full mathematical inspectability."
+
+   Q: "How do you test FEC without knowing the code polynomial beforehand?"
+   A: "We run candidate Viterbi decoders and Reed-Solomon syndrome checks against a null hypothesis 
+       (uncoded bitstream). We measure bit error rate reduction and compute a z-score. Only when the 
+       z-score exceeds statistical thresholds do we report a confirmed FEC hypothesis."
+
+
+--------------------------------------------------------------------------------
+6. HOW TO RUN AND VERIFY THE SYSTEM
+--------------------------------------------------------------------------------
+
+1. LOCAL DEVELOPMENT RUN:
+   - Backend API:
+     uvicorn backend.app.main:app --host 127.0.0.1 --port 8000
+   - Frontend Dev Server:
+     cd frontend && npm run dev (accessible at http://localhost:5173)
+
+2. PRODUCTION RUN (Single Origin):
+   - Build frontend: `cd frontend && npm run build`
+   - Launch backend: `uvicorn backend.app.main:app --host 127.0.0.1 --port 8000`
+   - Access web app & docs at: http://localhost:8000
+
+3. DOCKER RUN:
+   - docker compose up --build
+   - Open http://localhost:8000 in browser.
+
+4. AUTOMATED TESTS:
+   - Run pytest suite: `pytest` in repository root.
+
+================================================================================
+  END OF PROJECT EXPLANATION & EXECUTION FLOW DOCUMENTATION
+================================================================================
